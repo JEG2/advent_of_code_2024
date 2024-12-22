@@ -10,61 +10,36 @@ defmodule GuardGallivant do
   end
 
   def solve_part_1(input_path) do
-    %{map: map, start: start, max_x: max_x, max_y: max_y} =
-      parse_input(input_path)
-
-    {start, :up, MapSet.new([start])}
-    |> Stream.iterate(fn {xy, direction, visited} ->
-      next_xy = move(xy, direction)
-
-      if Map.fetch!(map, next_xy) == "#" do
-        {xy, turn(direction), visited}
-      else
-        {next_xy, direction, MapSet.put(visited, next_xy)}
-      end
-    end)
-    |> Enum.find(fn
-      {{_x, 0}, :up, _visited} -> true
-      {{^max_x, _y}, :right, _visited} -> true
-      {{_x, ^max_y}, :down, _visited} -> true
-      {{0, _y}, :left, _visited} -> true
-      _not_on_edge -> false
-    end)
-    |> elem(2)
+    input_path
+    |> parse_input()
+    |> stream_moves()
+    |> Enum.into(MapSet.new(), fn {xy, _direction} -> xy end)
     |> MapSet.size()
   end
 
   def solve_part_2(input_path) do
-    %{map: map, start: start, max_x: max_x, max_y: max_y} =
-      parse_input(input_path)
+    state = parse_input(input_path)
 
-    {start, :up, MapSet.new(), MapSet.new()}
-    |> Stream.iterate(fn {xy, direction, corners, obstructions} ->
-      next_xy = move(xy, direction)
+    state
+    |> stream_moves()
+    |> Stream.transform(MapSet.new(), fn {xy, direction}, obstructions ->
+      obstruction_xy = move(xy, direction)
 
-      if Map.fetch!(map, next_xy) == "#" do
-        {xy, turn(direction), MapSet.put(corners, xy), obstructions}
-      else
-        if loop?(xy, direction, corners, map) do
-          {
-            next_xy,
-            direction,
-            corners,
-            MapSet.put(obstructions, next_xy)
-          }
+      obstructions =
+        if Map.has_key?(state.map, obstruction_xy) and
+             Map.fetch!(state.map, obstruction_xy) != "#" and
+             loop?(%{
+               state
+               | map: Map.put(state.map, obstruction_xy, "#")
+             }) do
+          MapSet.put(obstructions, obstruction_xy)
         else
-          {next_xy, direction, corners, obstructions}
+          obstructions
         end
-      end
+
+      {[obstructions], obstructions}
     end)
-    |> Enum.find(fn
-      {{_x, 0}, :up, _previous, _obstructions} -> true
-      {{^max_x, _y}, :right, _previous, _obstructions} -> true
-      {{_x, ^max_y}, :down, _previous, _obstructions} -> true
-      {{0, _y}, :left, _previous, _obstructions} -> true
-      _not_on_edge -> false
-    end)
-    |> elem(3)
+    |> Enum.at(-1)
     |> MapSet.size()
   end
 
@@ -86,7 +61,46 @@ defmodule GuardGallivant do
     {start, "^"} = Enum.find(map, fn {_xy, location} -> location == "^" end)
     max_x = map |> Map.keys() |> Enum.map(fn {x, _y} -> x end) |> Enum.max()
     max_y = map |> Map.keys() |> Enum.map(fn {_x, y} -> y end) |> Enum.max()
-    %{map: map, start: start, max_x: max_x, max_y: max_y}
+    %{map: map, max_x: max_x, max_y: max_y, start: start, direction: :up}
+  end
+
+  defp stream_moves(state) do
+    %{
+      map: map,
+      max_x: max_x,
+      max_y: max_y,
+      start: start,
+      direction: direction
+    } = state
+
+    Stream.concat(
+      [{start, direction}],
+      Stream.unfold({start, direction}, fn
+        {{_x, 0}, :up} ->
+          nil
+
+        {{^max_x, _y}, :right} ->
+          nil
+
+        {{_x, ^max_y}, :down} ->
+          nil
+
+        {{0, _y}, :left} ->
+          nil
+
+        {xy, direction} ->
+          next_xy = move(xy, direction)
+
+          result =
+            if Map.fetch!(map, next_xy) == "#" do
+              {xy, turn(direction)}
+            else
+              {next_xy, direction}
+            end
+
+          {result, result}
+      end)
+    )
   end
 
   defp move({x, y}, :up), do: {x, y - 1}
@@ -99,43 +113,15 @@ defmodule GuardGallivant do
   defp turn(:down), do: :left
   defp turn(:left), do: :up
 
-  defp loop?({x, y}, :up, corners, map) do
-    Enum.any?(corners, fn {corner_x, corner_y} ->
-      Map.get(map, {x - 1, y}) != "#" and corner_y == y and corner_x > x and
-        Enum.all?((x + 1)..corner_x, fn mx ->
-          Map.fetch!(map, {mx, y}) != "#"
-        end)
+  defp loop?(state) do
+    state
+    |> stream_moves()
+    |> Stream.transform(MapSet.new(), fn xy_direction, visited ->
+      loop? = MapSet.member?(visited, xy_direction)
+      {[loop?], MapSet.put(visited, xy_direction)}
     end)
+    |> Enum.any?()
   end
-
-  defp loop?({x, y}, :right, corners, map) do
-    Enum.any?(corners, fn {corner_x, corner_y} ->
-      Map.get(map, {x, y - 1}) != "#" and corner_x == x and corner_y > y and
-        Enum.all?((y + 1)..corner_y, fn my ->
-          Map.fetch!(map, {x, my}) != "#"
-        end)
-    end)
-  end
-
-  defp loop?({x, y}, :down, corners, map) do
-    Enum.any?(corners, fn {corner_x, corner_y} ->
-      Map.get(map, {x + 1, y}) != "#" and corner_y == y and corner_x < x and
-        Enum.all?((x - 1)..corner_x//-1, fn mx ->
-          Map.fetch!(map, {mx, y}) != "#"
-        end)
-    end)
-  end
-
-  defp loop?({x, y}, :left, corners, map) do
-    Enum.any?(corners, fn {corner_x, corner_y} ->
-      Map.get(map, {x, y + 1}) != "#" and corner_x == x and corner_y < y and
-        Enum.all?((y - 1)..corner_y//-1, fn my ->
-          Map.fetch!(map, {x, my}) != "#"
-        end)
-    end)
-  end
-
-  defp loop?(_xy, _direction, _corners, _map), do: false
 end
 
 System.argv()
